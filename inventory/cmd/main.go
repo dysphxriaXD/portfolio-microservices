@@ -1,0 +1,49 @@
+package main
+
+import (
+	"log/slog"
+	"net"
+	"os"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+
+	inventoryService "github.com/dysphxriaXD/inventory/internal/service"
+	inventoryv1 "github.com/dysphxriaXD/shared/pkg/proto/inventory/v1"
+)
+
+const grpcAddress = ":50051"
+
+func main() {
+	lis, err := net.Listen("tcp", grpcAddress)
+	if err != nil {
+		slog.Error("не удалось создать listener", "error", err)
+		os.Exit(1)
+	}
+
+	// TODO: Настроить gRPC сервер с параметрами keepalive
+	// Подумайте, какие параметры стоит задать для production-ready сервера
+	// См. examples/week_1/GRPC_CONNECTIONS.md
+	grpcServer := grpc.NewServer()
+	inventoryv1.RegisterInventoryServiceServer(grpcServer, inventoryService.NewServer())
+
+	// Включаем reflection для postman/grpcurl
+	reflection.Register(grpcServer)
+
+	// Строку "gRPC сервер запущен" ждут E2E-тесты: по ней они понимают, что сервис
+	// готов. Адрес с пустым хостом слушает все интерфейсы, иначе в контейнер не достучаться.
+	slog.Info("gRPC сервер запущен", "address", grpcAddress)
+
+	// TODO: Реализовать graceful shutdown
+	// При получении сигнала SIGINT/SIGTERM сервер должен:
+	// 1. Перестать принимать новые соединения
+	// 2. Дождаться завершения текущих запросов
+	// 3. Корректно завершить работу
+	// Подсказка: используйте signal.NotifyContext и grpcServer.GracefulStop()
+
+	err = grpcServer.Serve(lis)
+	if err != nil {
+		slog.Error("ошибка запуска сервера", "error", err)
+		os.Exit(1)
+	}
+}

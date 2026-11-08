@@ -1,0 +1,6 @@
+bin/
+*.zip
+.DS_Store
+.git/
+.gitignore
+**/*_test.go

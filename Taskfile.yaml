@@ -1,0 +1,240 @@
+version: '3'
+
+vars:
+  GO_VERSION: '1.27.2'
+  GOLANGCI_LINT_VERSION: 'v2.14.0'
+  BUF_VERSION: '1.73.0'
+  PROTOC_GEN_GO_VERSION: 'v1.36.12'
+  PROTOC_GEN_GO_GRPC_VERSION: 'v1.6.2'
+  OGEN_VERSION: 'v1.24.0'
+  GOVULNCHECK_VERSION: 'v1.9.0'
+  GITLEAKS_VERSION: 'v8.30.1'
+
+  BIN_DIR: '{{.ROOT_DIR}}/bin'
+
+  # Реестр версионируемых инструментов: источник для tools:install. Ставятся в
+  # bin/<имя>/<версия>/, при установке сносятся прочие версии (прун), поэтому бамп
+  # *_VERSION автоматически триггерит переустановку (status проверяет путь с версией).
+  # protoc-плагины сюда НЕ входят: buf.gen.yaml ссылается на них относительным путём
+  # ../../bin/protoc-gen-go и не умеет интерполировать версию, поэтому их ставит отдельная
+  # задача proto:install-plugins в плоский bin/.
+  TOOLS:
+    - {name: golangci-lint, version: '{{.GOLANGCI_LINT_VERSION}}', pkg: 'github.com/golangci/golangci-lint/v2/cmd/golangci-lint'}
+    - {name: buf,           version: 'v{{.BUF_VERSION}}',          pkg: 'github.com/bufbuild/buf/cmd/buf'}
+    - {name: ogen,          version: '{{.OGEN_VERSION}}',          pkg: 'github.com/ogen-go/ogen/cmd/ogen'}
+    - {name: govulncheck,   version: '{{.GOVULNCHECK_VERSION}}',   pkg: 'golang.org/x/vuln/cmd/govulncheck'}
+    - {name: gitleaks,      version: '{{.GITLEAKS_VERSION}}',      pkg: 'github.com/zricethezav/gitleaks/v8'}
+
+  GOLANGCI_LINT: '{{.BIN_DIR}}/golangci-lint/{{.GOLANGCI_LINT_VERSION}}/golangci-lint'
+  BUF: '{{.BIN_DIR}}/buf/v{{.BUF_VERSION}}/buf'
+  OGEN: '{{.BIN_DIR}}/ogen/{{.OGEN_VERSION}}/ogen'
+  GOVULNCHECK: '{{.BIN_DIR}}/govulncheck/{{.GOVULNCHECK_VERSION}}/govulncheck'
+  GITLEAKS: '{{.BIN_DIR}}/gitleaks/{{.GITLEAKS_VERSION}}/gitleaks'
+
+  # protoc-плагины: плоский layout (см. комментарий к TOOLS).
+  PROTOC_GEN_GO: '{{.BIN_DIR}}/protoc-gen-go'
+  PROTOC_GEN_GO_GRPC: '{{.BIN_DIR}}/protoc-gen-go-grpc'
+
+  MODULES: order inventory payment e2e
+
+tasks:
+  tools:install:
+    desc: "Устанавливает версионируемые инструменты в bin/<имя>/<версия>/"
+    cmds:
+      # На каждый инструмент из TOOLS: поставить в bin/<имя>/<версия>/ и снести
+      # прочие его версии (по-утилитный прун, без коллизий между утилитами).
+      - for: { var: TOOLS }
+        cmd: |
+          echo "📦 Устанавливаем {{.ITEM.name}} {{.ITEM.version}}..."
+          # Миграция со старого плоского layout: снести bin/<name>, если это файл,
+          # иначе mkdir bin/<name>/<version> упрётся в одноимённый файл.
+          [ -f "{{.BIN_DIR}}/{{.ITEM.name}}" ] && rm -f "{{.BIN_DIR}}/{{.ITEM.name}}" || true
+          GOBIN="{{.BIN_DIR}}/{{.ITEM.name}}/{{.ITEM.version}}" go install "{{.ITEM.pkg}}@{{.ITEM.version}}"
+          for d in "{{.BIN_DIR}}/{{.ITEM.name}}"/*/; do
+            [ -d "$d" ] || continue
+            [ "$(basename "$d")" = "{{.ITEM.version}}" ] || rm -rf "$d"
+          done
+      # Отметка версии Go, которой собраны инструменты. После смены версии Go задача
+      # переустановит их: golangci-lint, собранный старым Go, код под новый Go не проверяет.
+      - go env GOVERSION > "{{.BIN_DIR}}/.go-version"
+    status:
+      - test "$(cat "{{.BIN_DIR}}/.go-version" 2>/dev/null)" = "$(go env GOVERSION)"
+      - test -x {{.GOLANGCI_LINT}}
+      - test -x {{.BUF}}
+      - test -x {{.OGEN}}
+      - test -x {{.GOVULNCHECK}}
+      - test -x {{.GITLEAKS}}
+
+  proto:install-plugins:
+    desc: "Устанавливает protoc-плагины"
+    cmds:
+      - echo '📦 Устанавливаем protoc-gen-go...'
+      - GOBIN={{.BIN_DIR}} go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+      - echo '📦 Устанавливаем protoc-gen-go-grpc...'
+      - GOBIN={{.BIN_DIR}} go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_VERSION}}
+    status:
+      - test -x {{.PROTOC_GEN_GO}}
+      - test -x {{.PROTOC_GEN_GO_GRPC}}
+
+  setup:
+    desc: "Устанавливает все инструменты"
+    deps: [tools:install, proto:install-plugins]
+
+  format:
+    desc: "Форматирует код (gofumpt + gci через golangci-lint fmt)"
+    deps: [tools:install]
+    cmds:
+      - echo '🧹 Форматируем код (golangci-lint fmt)...'
+      - '{{.GOLANGCI_LINT}} fmt --config=.golangci.yml'
+
+  format:check:
+    desc: "Проверяет форматирование без правки (--diff), падает если нужно переформатировать"
+    deps: [tools:install]
+    cmds:
+      - '{{.GOLANGCI_LINT}} fmt --diff --config=.golangci.yml'
+
+  build:
+    desc: "Собирает все Go-модули (go build)"
+    cmds:
+      - go build ./order/... ./inventory/... ./payment/... ./e2e/...
+
+  lint:
+    desc: "Запускает golangci-lint"
+    deps: [tools:install]
+    cmds:
+      - '{{.GOLANGCI_LINT}} run --allow-parallel-runners order/... inventory/... payment/... e2e/... --config=.golangci.yml'
+
+  proto:format:
+    desc: "Форматирует .proto-файлы (buf format)"
+    deps: [tools:install]
+    dir: shared/proto
+    cmds:
+      - echo '🧹 Форматируем .proto-файлы...'
+      - '{{.BUF}} format -w'
+
+  proto:lint:
+    desc: "Проверяет .proto-файлы линтером"
+    deps: [tools:install, proto:install-plugins, proto:format]
+    dir: shared/proto
+    cmds:
+      - echo '🔍 Проверяем .proto-файлы...'
+      - '{{.BUF}} lint'
+
+  proto:gen:
+    desc: "Генерирует Go-код из .proto"
+    deps: [tools:install, proto:install-plugins, proto:format]
+    dir: shared/proto
+    cmds:
+      - echo '🔨 Генерируем Go-код из .proto...'
+      - '{{.BUF}} generate'
+
+  ogen:gen:
+    desc: "Генерирует Go-код из OpenAPI"
+    deps: [tools:install]
+    dir: shared
+    cmds:
+      - echo '🔨 Генерируем Go-код из OpenAPI...'
+      - '{{.OGEN}} -target ./pkg/openapi/order/v1 -package orderv1 -clean ./api/order/v1/order.openapi.yaml 2>/dev/null'
+
+  gen:
+    desc: "Генерирует весь код"
+    cmds:
+      - task: proto:gen
+      - task: ogen:gen
+
+  deps:update:
+    desc: "Обновляет зависимости"
+    cmds:
+      - echo '🔄 Синхронизируем go.work...'
+      - go work sync
+      - echo '🔄 Обновляем зависимости в сервисах...'
+      - for: { var: MODULES }
+        cmd: cd {{.ITEM}} && go mod tidy -compat={{.GO_VERSION}}
+      - echo '🔄 Обновляем зависимости в shared (proto/openapi)...'
+      - cd shared && go mod tidy -compat={{.GO_VERSION}}
+
+  run:inventory:
+    desc: "Запускает InventoryService (gRPC :50051)"
+    dir: inventory
+    cmds:
+      - go run ./cmd
+
+  run:payment:
+    desc: "Запускает PaymentService (gRPC :50052)"
+    dir: payment
+    cmds:
+      - go run ./cmd
+
+  run:order:
+    desc: "Запускает OrderService (HTTP :8080)"
+    dir: order
+    cmds:
+      - go run ./cmd
+
+  test:
+    desc: "Запускает E2E-тесты (нужен Docker; на week_1 алиас на test:e2e)"
+    cmds:
+      - task: test:e2e
+
+  test:e2e:
+    desc: "E2E-тесты через testcontainers (модуль e2e; нужен запущенный Docker)"
+    cmds:
+      # -p 1, пакеты e2e гоняем последовательно: inventory/payment и order-стек
+      # собирают одни и те же образы сервисов, при параллельном go test это даёт
+      # гонку сборки в Docker ("image already exists"). Последовательный прогон
+      # детерминирован; образы кэшируются (KeepImage), так что overhead невелик.
+      - go test -p 1 -count=1 -v ./e2e/...
+
+  test:e2e:clean:
+    desc: "Удаляет собранные e2e-образы (week1-e2e-*) и висячие слои — освободить диск"
+    cmds:
+      - 'echo "🧹 Удаляем e2e-образы week1-e2e-*..."'
+      - "docker images 'week1-e2e-*' -q | sort -u | xargs -r docker rmi -f"
+      - docker image prune -f
+
+  vuln:
+    desc: "Скан зависимостей на известные уязвимости (govulncheck)"
+    deps: [tools:install]
+    # package-режим вместо дефолтного symbol: symbol строит SSA call-graph и
+    # паникует на Go 1.26 (x/tools в govulncheck ещё не знает новых дженериков).
+    # package: надмножество symbol по находкам, стабилен на 1.26.
+    cmds:
+      - for: { var: MODULES }
+        cmd: cd {{.ITEM}} && {{.GOVULNCHECK}} -scan package ./...
+
+  secrets:
+    desc: "Скан файлов проекта на секреты (gitleaks)"
+    deps: [tools:install]
+    # dir (а не git): сканируем файлы рабочего дерева этого проекта, а не историю:
+    # иначе в монорепо курса gitleaks обходит коммиты всех недель сразу.
+    cmds:
+      - '{{.GITLEAKS}} dir . --redact --no-banner'
+
+  hooks:install:
+    desc: "Прописать git-хуки репозитория (.githooks через core.hooksPath)"
+    cmds:
+      - git config core.hooksPath .githooks
+      - chmod +x .githooks/*
+    status:
+      - test "$(git config core.hooksPath)" = ".githooks"
+
+  pre-commit:
+    desc: "Быстрый гейт перед коммитом (формат + линт + секреты)"
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: secrets
+
+  pre-push:
+    desc: "Полный гейт перед пушем (= ci)"
+    cmds:
+      - task: ci
+
+  ci:
+    desc: "Полный гейт: формат + линт + секреты + уязвимости + тесты"
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: secrets
+      - task: vuln
+      - task: test

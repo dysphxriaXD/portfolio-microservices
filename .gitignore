@@ -1,0 +1,14 @@
+# Инструменты, которые ставит task tools:install
+bin/
+
+# Отчёты покрытия (с недели 2)
+coverage/
+
+# Кэш линтера
+.golangci-cache/
+
+# Редакторы и система
+.idea/
+.vscode/
+.cursor/
+.DS_Store
