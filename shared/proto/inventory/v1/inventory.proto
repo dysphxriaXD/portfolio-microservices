@@ -2,24 +2,31 @@ syntax = "proto3";
 
 package inventory.v1;
 
-option go_package = "github.com/dysphxriaXD/shared/pkg/proto/inventory/v1;inventoryv1";
-
 import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/dysphxriaXD/shared/pkg/proto/inventory/v1;inventoryv1";
 
 // InventoryService управляет каталогом деталей для космических кораблей
 service InventoryService {
   // GetPart возвращает деталь по UUID
   rpc GetPart(GetPartRequest) returns (GetPartResponse);
 
-  // TODO: Добавить метод ListParts
+  //ListParts перечисляет количество деталей
+  rpc ListParts(ListPartsRequest) returns (ListPartsResponse);
 }
 
 // Тип детали
 enum PartType {
+  //Не указан
   PART_TYPE_UNSPECIFIED = 0;
+  //Корпус корабля
   PART_TYPE_HULL = 1;
+  //Двигатель
   PART_TYPE_ENGINE = 2;
-  // TODO: Добавить остальные типы деталей из описания задания
+  //Защитный щит
+  PART_TYPE_SHIELD = 3;
+  //Вооружение
+  PART_TYPE_WEAPON = 4;
 }
 
 // Part представляет деталь космического корабля
@@ -36,16 +43,38 @@ message Part {
   // Цена в копейках (5000₽ = 500000)
   int64 price = 4;
 
-  // TODO: Добавить остальные поля из описания задания
+  // Тип детали (enum)
+  PartType part_type = 5;
+
+  //Количество на складе
+  int64 stock_quantity = 6;
+
+  //Дата создания
+  google.protobuf.Timestamp created_at = 7;
 }
 
 // Запрос на получение детали по UUID
 message GetPartRequest {
+  //Идентификатор детали
   string uuid = 1;
 }
 
-// TODO: Реализовать GetPartResponse
+//GetPartResponse возвращает деталь
+message GetPartResponse {
+  //Информация о детали
+  Part part = 1;
+}
 
-// TODO: Реализовать ListPartsRequest
+//ListPartsRequest запрос на список деталей
+message ListPartsRequest {
+  //Фильтр по типу (UNSPECIFIED = все детали)
+  PartType part_type = 1;
+  //Опционально: конкретные UUID (приоритет над part_type)
+  repeated string uuids = 2;
+}
 
-// TODO: Реализовать ListPartsResponse
+//ListPartsResponse возвращает список найденных деталей
+message ListPartsResponse {
+  //Список найденных деталей
+  repeated Part parts = 1;
+}
